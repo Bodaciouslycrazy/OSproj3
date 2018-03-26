@@ -2,7 +2,6 @@
 //3-20-2018
 
 /*
-
 COMPILE INSTRUCTIONS.
 There are some flags you need to include while compiling.
 Here is the command I used for compiling...
@@ -10,7 +9,12 @@ Here is the command I used for compiling...
 gcc -pthread -lrt -o csmc csmc.c
 
 This should work an any bash/linux environment.
-Please email me at bam150130@utdallas.edu if you have any problems.
+If you have any problems, email me at bam150130@utdallas.edu
+*/
+
+/*
+ToDo:
+Noting.
 */
 
 #include <stdio.h>
@@ -24,53 +28,76 @@ Please email me at bam150130@utdallas.edu if you have any problems.
 //**********************Arguments*******************
 //Do not change these after they have been read!
 //These here are just standard values.
-int NUM_TUTORS = 5;
+int NUM_TUTORS = 3;
 int NUM_STUDENTS = 10;
 int NUM_MAXCHAIRS = 5;
-int NUM_HELP = 3;
-//**************************************************
+int NUM_HELP = 2;
+//***************************************************
 
 
 //*********************MUTEXES***********************
-//The variables under each mutex requires a lock from
-//that mutex. Otherwise, DO NOT USE IT.
-
 pthread_mutex_t MutexChairs;
-int CurEmptyChairs = 5;
-
 //***************************************************
+
 
 //********************SEMAPHORES*********************
-sem_t SemTutors;
-sem_t SemStudents;
+sem_t SemTutorsReady;
+sem_t SemStudentsReady;
+
+sem_t SemTutorsWaiting;
+sem_t SemStudentsWaiting;
+
+sem_t SemStudentsGettingHelp;
+
+sem_t SemStudentsFinished;
 //***************************************************
 
+int TutorsBreak = 0;
 
+
+/***********************************************************
+						Manager
+************************************************************/
 void *ManagerStart(void *param)
 {
+	printf("Manager thread created.\n");
 	//waits for a tutor
 	//waits for a student
-	
 	//pairs them
-	
 	//repeat
+	int pairsNeeded = NUM_STUDENTS * NUM_HELP;
 	
-	while(1)
+	while( pairsNeeded > 0)
 	{
-		sem_wait(&SemTutors);
-		sem_wait(&SemStudents);
-		
+		sem_wait(&SemTutorsReady);
+		sem_wait(&SemStudentsReady);
 		//Found a tutor and a student. Pair them.
-		printf("Coordinator found a student/tutor pair.\n");
+		printf("Manager found a student/tutor pair.\n");
 		
+		sem_post(&SemStudentsWaiting);
+		sem_post(&SemTutorsWaiting);
+		
+		pairsNeeded -= 1;
 	}
 	
+	//Wait until all students have terminated.
+	for(int i = 0; i < NUM_STUDENTS; i++)
+	{
+		sem_wait(&SemStudentsFinished);
+	}
 	
+	//Now it is safe to terminate tutors.
+	TutorsBreak = 1;
+	for(int i = 0; i < NUM_TUTORS; i++)
+	{
+		sem_post(&SemTutorsWaiting);
+	}
 	
-	sleep(15);
-	printf("Manager finished.\n");
+	printf("Manager thread finished.\n");
 	return NULL;
 }
+
+
 
 /***********************************************************
 						TUTOR
@@ -85,8 +112,23 @@ void *TutorStart(void *param)
 		printf("Tutor %d is wiating to be assigned to a student.\n",num);
 		
 		//Signal that a tutor is waiting for a student.
-		sem_post(&SemTutors);
-		//CONTINUE HERE===============================================================================
+		sem_post(&SemTutorsReady);
+		sem_wait(&SemTutorsWaiting);
+		
+		if(TutorsBreak == 1)
+			break;
+		
+		int waitNum = rand() % 3 + 1;
+		
+		pthread_mutex_lock(&MutexChairs);
+		int chairsTaken;
+		sem_getvalue(&SemStudentsReady, &chairsTaken);
+		printf("Tutor %d is helping a student for %d seconds. Waiting Students = %d.\n", num, waitNum, chairsTaken);
+		pthread_mutex_unlock(&MutexChairs);
+		
+		sleep(waitNum);
+		
+		sem_post(&SemStudentsGettingHelp);
 	}
 	
 	printf("Tutor thread %d has finished.\n", num);
@@ -110,11 +152,13 @@ void *StudentStart(void *param)
 		//Program for some time, then seek help.
 		sleep( rand() % 3 + 1); //will sleep anywhere from 1 to 3 seconds
 		
-		//I NEED HELP NOW, SEARCH FOR WAITING CHAIR
+		//STUDENT NEEDS HELP NOW, SEARCH FOR WAITING CHAIR
 		
 		//*********Using MutexChairs**************
 		pthread_mutex_lock(&MutexChairs);
-		if(CurEmptyChairs <= 0)
+		int numTaken;
+		sem_getvalue(&SemStudentsReady, &numTaken);
+		if( numTaken >= NUM_MAXCHAIRS )
 		{
 			//all the chairs are taken. End mutex and program more..
 			printf("Student %d found no empty chair. Will come back later...\n", num);
@@ -123,21 +167,34 @@ void *StudentStart(void *param)
 		}
 		else
 		{
-			CurEmptyChairs -= 1;
-			printf("Student %d takes a seat. Waiting students = %d.\n", num, NUM_MAXCHAIRS - CurEmptyChairs);
+			numTaken += 1;
+			printf("Student %d takes a seat. Waiting students = %d.\n", num, numTaken);
+			sem_post(&SemStudentsReady);
 		}
 		pthread_mutex_unlock(&MutexChairs);
 		//*********Finished using MutexChairs*****
 		
-		//We now have a waiting chair. Signal that a student is waiting.
-		sem_post(&SemStudents);
-		//INCOMPLETE======================================================================continue coding here
+		//We now have a waiting chair. Wait for the coordinator.
+		sem_wait(&SemStudentsWaiting);
+		
+		//wait for tutor to finish sleeping
+		sem_wait(&SemStudentsGettingHelp);
+		
+		//I HAVE OFFICIALLY BEEN HELPED!
+		HelpNeeded -= 1;
+		printf("Student %d has been helped. Need help %d more times.\n",num, HelpNeeded);
 	}
 	
 	printf("Student thread %d has finished.\n", num);
+	sem_post(&SemStudentsFinished);
 	return NULL;
 }
 
+
+
+/***********************************************************
+						MAIN
+************************************************************/
 int main(int argc, char *argv[])
 {
 	//Read arguments
@@ -147,7 +204,25 @@ int main(int argc, char *argv[])
 		NUM_TUTORS 			= atoi( argv[2] );
 		NUM_MAXCHAIRS 		= atoi( argv[3] );
 		NUM_HELP 			= atoi( argv[4] );
+		
+		if(NUM_STUDENTS < 0 || NUM_TUTORS < 0 || NUM_MAXCHAIRS < 0 || NUM_HELP < 0)
+		{
+			printf("If you want to break my code, you are gonna have to try harder than that.\n");
+			printf("Negative arguments are not allowed.");
+			return 1;
+		}
 	}
+	else if(argc == 1)
+	{
+		printf("No arguments read. Using default arguments.\n");
+	}
+	else
+	{
+		printf("There was in incorrect number of arguments.\n");
+		printf("Either input 4 positive ints, or no arguments to use default args.\n");
+		return 1;
+	}
+	
 	
 	//initialize randomizer
 	srand(time(NULL));
@@ -160,20 +235,44 @@ int main(int argc, char *argv[])
 	}
 	
 	//initialize semaphores.
-	if( sem_init( &SemTutors, 0, 0) != 0)
+	if( sem_init( &SemTutorsReady, 0, 0) != 0)
 	{
-		printf("Error creating tutor semaphore.\n");
+		printf("Error creating semaphore.\n");
 		return 1;
 	}
 	
-	if( sem_init( &SemStudents, 0, 0) != 0)
+	if( sem_init( &SemStudentsReady, 0, 0) != 0)
 	{
-		printf("Error creating students semaphore.\n");
+		printf("Error creating semaphore.\n");
+		return 1;
+	}
+	
+	if( sem_init( &SemTutorsWaiting, 0, 0) != 0)
+	{
+		printf("Error creating semaphore.\n");
+		return 1;
+	}
+	
+	if( sem_init( &SemStudentsWaiting, 0, 0) != 0)
+	{
+		printf("Error creating semaphore.\n");
+		return 1;
+	}
+	
+	if( sem_init( &SemStudentsGettingHelp, 0, 0) != 0)
+	{
+		printf("Error creating semaphore.\n");
+		return 1;
+	}
+	
+	if( sem_init( &SemStudentsFinished, 0, 0) != 0)
+	{
+		printf("Error creating semaphore.\n");
 		return 1;
 	}
 	
 	
-	//******************CREATE THE THREADS*******************
+	//******************CREATE THE THREADS***************************
 	pthread_t TutorThreads[NUM_TUTORS];
 	pthread_t StudentThreads[NUM_STUDENTS];
 	pthread_t ManagerThread;
@@ -189,7 +288,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		
-		printf("Created tutor %d\n", i);
+		//printf("Created tutor %d\n", i);
 	}
 	
 	for(int i = 0; i < NUM_STUDENTS; i++)
@@ -203,7 +302,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		
-		printf("Created student %d\n", i);
+		//printf("Created student %d\n", i);
 	}
 	
 	if( pthread_create(&ManagerThread, NULL, ManagerStart, NULL) )
@@ -214,7 +313,7 @@ int main(int argc, char *argv[])
 	//MANAGER SHOULD NOW DO STUFF.
 	//JOIN EVERYTHING BACK UP AFTER MANAGER RETURNS.
 	
-	//wait and join up.
+	//******************JOIN THE THREADS***************************
 	pthread_join(ManagerThread, NULL);
 	
 	for(int i = 0; i < NUM_TUTORS; i++)
