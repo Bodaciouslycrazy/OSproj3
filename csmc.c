@@ -25,6 +25,9 @@ Noting.
 #include <stdbool.h>
 #include <semaphore.h>
 
+#define SLEEP_MIN 1
+#define SLEEP_MAX 3
+
 //**********************Arguments*******************
 //Do not change these after they have been read!
 //These here are just standard values.
@@ -49,11 +52,19 @@ sem_t SemTutorsWaiting;			//Used to block tutors until a student is found.
 sem_t SemStudentsWaiting;		//Used to block students until a tutor is found.
 
 sem_t SemStudentsGettingHelp;	//Used to make students wait for their tutor to "teach something" (sleep).
+//SemStudentsGettingHelp deprecated.
 
 sem_t SemStudentsFinished;		//Used to signal the manager that a student has finished.
 //***************************************************
-
 int TutorsBreak = 0;			//Makes the tutors break and end thread.
+
+
+//Helper function.
+//Returns a sleep length between (and including) SLEEP_MIN and SLEEP_MAX
+int GetSleepLength()
+{
+	return rand() % (SLEEP_MAX - SLEEP_MIN + 1) + SLEEP_MIN;
+}
 
 
 /***********************************************************
@@ -119,7 +130,7 @@ void *TutorStart(void *param)
 		if(TutorsBreak == 1)
 			break;
 		
-		int waitNum = rand() % 3 + 1;
+		int waitNum = GetSleepLength();
 		
 		//*********Using MutexChairs***********************
 		pthread_mutex_lock(&MutexChairs);
@@ -129,7 +140,8 @@ void *TutorStart(void *param)
 		
 		sleep(waitNum);
 		
-		sem_post(&SemStudentsGettingHelp);
+		//deprecated.
+		//sem_post(&SemStudentsGettingHelp);
 	}
 	
 	printf("Tutor thread %d has finished.\n", num);
@@ -151,7 +163,7 @@ void *StudentStart(void *param)
 	while(HelpNeeded > 0)
 	{
 		//Program for some time, then seek help.
-		sleep( rand() % 3 + 1); //will sleep anywhere from 1 to 3 seconds
+		sleep( GetSleepLength() ); //will sleep anywhere from 1 to 3 seconds
 		
 		//STUDENT NEEDS HELP NOW, SEARCH FOR WAITING CHAIR
 		
@@ -180,16 +192,17 @@ void *StudentStart(void *param)
 		//*********Using MutexChairs**************
 		pthread_mutex_lock(&MutexChairs);
 		EmptyChairs += 1;
-		printf("Student %d left his chair to get help. Waiting students = %d.\n", num, NUM_MAXCHAIRS - EmptyChairs);
+		printf("Student %d has been helped. Waiting students = %d.\n", num, NUM_MAXCHAIRS - EmptyChairs);
 		pthread_mutex_unlock(&MutexChairs);
 		//*********Finished using MutexChairs**************
 		
+		/*
 		//wait for tutor to finish sleeping
 		sem_wait(&SemStudentsGettingHelp);
+		*/
 		
 		//I HAVE OFFICIALLY BEEN HELPED!
 		HelpNeeded -= 1;
-		printf("Student %d has been helped. Need help %d more times.\n",num, HelpNeeded);
 	}
 	
 	printf("Student thread %d has finished.\n", num);
