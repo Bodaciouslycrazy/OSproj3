@@ -36,23 +36,24 @@ int NUM_HELP = 2;
 
 
 //*********************MUTEXES***********************
-pthread_mutex_t MutexChairs;
+pthread_mutex_t MutexChairs;	//This is used so that two students don't sit down at the same time.
+int EmptyChairs = 0;
 //***************************************************
 
 
 //********************SEMAPHORES*********************
-sem_t SemTutorsReady;
-sem_t SemStudentsReady;
+sem_t SemTutorsReady; 			//Used to signal manager that a tutor is waiting.
+sem_t SemStudentsReady; 		//Used to signal manager that a student is waiting.
 
-sem_t SemTutorsWaiting;
-sem_t SemStudentsWaiting;
+sem_t SemTutorsWaiting;			//Used to block tutors until a student is found.
+sem_t SemStudentsWaiting;		//Used to block students until a tutor is found.
 
-sem_t SemStudentsGettingHelp;
+sem_t SemStudentsGettingHelp;	//Used to make students wait for their tutor to "teach something" (sleep).
 
-sem_t SemStudentsFinished;
+sem_t SemStudentsFinished;		//Used to signal the manager that a student has finished.
 //***************************************************
 
-int TutorsBreak = 0;
+int TutorsBreak = 0;			//Makes the tutors break and end thread.
 
 
 /***********************************************************
@@ -72,7 +73,7 @@ void *ManagerStart(void *param)
 		sem_wait(&SemTutorsReady);
 		sem_wait(&SemStudentsReady);
 		//Found a tutor and a student. Pair them.
-		printf("Manager found a student/tutor pair.\n");
+		printf("Manager found a student/tutor pair. Waking them up...\n");
 		
 		sem_post(&SemStudentsWaiting);
 		sem_post(&SemTutorsWaiting);
@@ -120,11 +121,11 @@ void *TutorStart(void *param)
 		
 		int waitNum = rand() % 3 + 1;
 		
+		//*********Using MutexChairs***********************
 		pthread_mutex_lock(&MutexChairs);
-		int chairsTaken;
-		sem_getvalue(&SemStudentsReady, &chairsTaken);
-		printf("Tutor %d is helping a student for %d seconds. Waiting Students = %d.\n", num, waitNum, chairsTaken);
+		printf("Tutor %d is helping a student for %d seconds. Waiting Students = %d.\n", num, waitNum, NUM_MAXCHAIRS - EmptyChairs);
 		pthread_mutex_unlock(&MutexChairs);
+		//*********finished using MutexChairs**************
 		
 		sleep(waitNum);
 		
@@ -154,28 +155,34 @@ void *StudentStart(void *param)
 		
 		//STUDENT NEEDS HELP NOW, SEARCH FOR WAITING CHAIR
 		
-		//*********Using MutexChairs**************
+		//*********Using MutexChairs**********************
 		pthread_mutex_lock(&MutexChairs);
-		int numTaken;
-		sem_getvalue(&SemStudentsReady, &numTaken);
-		if( numTaken >= NUM_MAXCHAIRS )
+		if( EmptyChairs > 0 )
+		{
+			EmptyChairs -= 1;
+			printf("Student %d takes a seat. Waiting students = %d.\n", num, NUM_MAXCHAIRS - EmptyChairs);
+			sem_post(&SemStudentsReady);
+			pthread_mutex_unlock(&MutexChairs);
+		}
+		else
 		{
 			//all the chairs are taken. End mutex and program more..
 			printf("Student %d found no empty chair. Will come back later...\n", num);
 			pthread_mutex_unlock(&MutexChairs);
 			continue;
 		}
-		else
-		{
-			numTaken += 1;
-			printf("Student %d takes a seat. Waiting students = %d.\n", num, numTaken);
-			sem_post(&SemStudentsReady);
-		}
-		pthread_mutex_unlock(&MutexChairs);
-		//*********Finished using MutexChairs*****
+		//*********Finished using MutexChairs************
 		
 		//We now have a waiting chair. Wait for the coordinator.
 		sem_wait(&SemStudentsWaiting);
+		
+		//We are getting help now, get up from chair
+		//*********Using MutexChairs**************
+		pthread_mutex_lock(&MutexChairs);
+		EmptyChairs += 1;
+		printf("Student %d left his chair to get help. Waiting students = %d.\n", num, NUM_MAXCHAIRS - EmptyChairs);
+		pthread_mutex_unlock(&MutexChairs);
+		//*********Finished using MutexChairs**************
 		
 		//wait for tutor to finish sleeping
 		sem_wait(&SemStudentsGettingHelp);
@@ -222,6 +229,8 @@ int main(int argc, char *argv[])
 		printf("Either input 4 positive ints, or no arguments to use default args.\n");
 		return 1;
 	}
+	
+	EmptyChairs = NUM_MAXCHAIRS;
 	
 	
 	//initialize randomizer
